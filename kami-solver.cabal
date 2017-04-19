@@ -14,6 +14,8 @@ cabal-version:       >=1.10
 
 executable kami-solver
   main-is:             Driver.hs
+  other-modules:       Parser, Kami
+  hs-source-dirs:      src
   ghc-options:         -threaded -with-rtsopts=-N
   build-depends:       base                 >=4.9  && <4.10,
                        parallel             >=3.2  && <3.3,
