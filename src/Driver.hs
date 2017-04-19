@@ -27,21 +27,23 @@ main :: IO ()
 main =
   do fns <- getArgs
      when (null fns) (failure "No filename arguments provided")
-     mapM_ processPuzzle fns
+     term <- setupTermFromEnv
+     mapM_ (processPuzzle term) fns
 
 
 -- | Process a puzzle file by rendering it, computing a solution,
 -- and rendering the solution.
-processPuzzle :: FilePath -> IO ()
-processPuzzle fn =
+processPuzzle :: Terminal -> FilePath -> IO ()
+processPuzzle term fn =
+
   do putStrLn ""
      putStrLn ("Processing puzzle: " ++ fn)
      putStrLn ""
-     puz  <- load fn
-     let (locations, g) = buildGraph (addCoordinates (puzColors puz))
-     term <- setupTermFromEnv
 
-     putStr (prettyKami term puz)
+     puz <- load fn
+     let (locations, g) = buildGraph (addCoordinates (puzColors puz))
+
+     putStrLn (prettyKami term puz)
      putStrLn ("Palette: " ++ show (puzPalette puz))
      putStrLn ("Expected Moves: " ++ show (puzMoves puz))
      putStrLn ("Regions: " ++ show (noNodes g))
@@ -129,7 +131,8 @@ buildGraph xs = (locs, g2)
 -- | Render rows of colors using the given palette as a triangular grid.
 prettyKami :: Terminal -> PuzzleData -> String
 prettyKami term puz =
-  unlines $ reverse (zipWith drawRow [0..] (puzColors puz)) ++
+  unlines $ [replicate h ' ' ++ columnLabels ] ++
+            reverse (zipWith drawRow [0..] (puzColors puz)) ++
             [columnLabels]
   where
     glyphs = "▲▼"
@@ -138,8 +141,9 @@ prettyKami term puz =
       replicate i ' ' ++ intToDigit i : ' ' :
       concat (zipWith (\s c -> withColor term (puzPalette puz) c [s])
                       (cycle glyphs)
-                      row)
+                      row) ++ [' ', intToDigit i]
 
+    h = length (puzColors puz)
     w = maximum (map length (puzColors puz)) `div` 2
     columnLabels = ' ' : concatMap showCol [0..w-1]
     showCol i | i < 10    = [' ', intToDigit i]
