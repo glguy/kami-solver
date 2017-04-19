@@ -2,66 +2,103 @@
 
 module Main where
 
-import Kami (KamiGraph, solve, Progress(..))
-import Parser
-import System.Environment
-import qualified Data.Map as Map
-import Data.Graph.Inductive
-import Data.Foldable
-import System.Exit
-import Data.List
-import Data.Char
-import System.IO
-import Data.Text (Text)
-import Data.IntMap (IntMap)
-import qualified Data.IntMap as IntMap
+import           Control.Monad
+import           Data.Char
+import           Data.Foldable
+import           Data.List
+import           Data.Text (Text)
+import           System.Environment
+import           System.Exit
+import           System.IO
 
-import System.Console.Terminfo
-          (Terminal, Color(..), setupTermFromEnv, getCapability, withForegroundColor)
+import           Data.Graph.Inductive
+import           Data.IntMap (IntMap)
+import qualified Data.IntMap as IntMap
+import qualified Data.Map as Map
+
+import           System.Console.Terminfo
+                    (Terminal, Color(..), setupTermFromEnv,
+                     getCapability, withForegroundColor)
+
+import           Kami (KamiGraph, solve, Progress(..))
+import           Parser
 
 main :: IO ()
 main =
-  do [fn]   <- getArgs
-     (paletteName,m,xs) <- load fn
-     let (locations, g) = buildGraph (addCoordinates xs)
+  do fns <- getArgs
+     when (null fns) (failure "No filename arguments provided")
+     mapM_ processPuzzle fns
+
+
+-- | Process a puzzle file by rendering it, computing a solution,
+-- and rendering the solution.
+processPuzzle :: FilePath -> IO ()
+processPuzzle fn =
+  do putStrLn ""
+     putStrLn ("Processing puzzle: " ++ fn)
+     putStrLn ""
+     puz  <- load fn
+     let (locations, g) = buildGraph (addCoordinates (puzColors puz))
      term <- setupTermFromEnv
 
-     putStr (prettyKami term paletteName xs)
-     putStrLn ("Palette: " ++ show paletteName)
-     putStrLn ("Expected Moves: " ++ show m)
+     putStr (prettyKami term puz)
+     putStrLn ("Palette: " ++ show (puzPalette puz))
+     putStrLn ("Expected Moves: " ++ show (puzMoves puz))
      putStrLn ("Regions: " ++ show (noNodes g))
      putStrLn ("Connections: " ++ show (length (edges g)))
 
-     mb <- printProgress (solve m g)
+     mb <- printProgress (solve (puzMoves puz) g)
 
      case mb of
        Nothing  -> failure "No solution"
        Just sol ->
          do putStrLn ("Solution: " ++ show (length sol))
-            putStrLn (renderSolution term paletteName locations sol)
+            putStrLn (renderSolution term (puzPalette puz) locations sol)
+
 
 -- | Print an error message and terminate the program.
-failure :: String -> IO a
+failure :: String {- ^ message -} -> IO a
 failure err = hPutStrLn stderr err >> exitFailure
 
 
-renderSolution :: Terminal -> Text -> IntMap Coord -> [LNode Int] -> String
+renderSolution ::
+  Terminal     {- ^ configured terminal       -} ->
+  Text         {- ^ palette name              -} ->
+  IntMap Coord {- ^ map nodes to coordinates  -} ->
+  [LNode Int]  {- ^ nodes labeled with colors -} ->
+  String
 renderSolution term pal locs sol =
-  intercalate ", " [ withColor term pal c (showCoord (locs IntMap.! n)) | (n,c) <- sol]
-  where
-    showCoord (x,y,s) = shows x $ showChar ':' $ shows y $ showChar ':' $ show s
+  intercalate ", "
+    [ withColor term pal c (renderCoord (locs IntMap.! n)) | (n,c) <- sol]
 
-withColor :: Terminal -> Text -> Int -> String -> String
+
+-- | Wrap a content string with the control codes to give it
+-- the requested color.
+withColor ::
+  Terminal {- ^ configured terminal -} ->
+  Text     {- ^ palette name        -} ->
+  Int      {- ^ color id            -} ->
+  String   {- ^ content             -} ->
+  String   {- ^ colored content     -}
 withColor term pal c str =
   case getCapability term withForegroundColor of
     Just f  -> f (palette pal c) str
     Nothing -> str
 
+
+-- | Transform a list of coordinate/color pairs into a graph
+-- of color regions suitable for passing to the solver.
+--
+-- This function also returns a reverse mapping of nodes back
+-- to coordinates to help translate the solution back to the
+-- original coordinate system.
 buildGraph :: [(Coord,Int)] -> (IntMap Coord, KamiGraph)
 buildGraph xs = (locs, g2)
   where
+   -- mapping of coordinates to node ids
    m = Map.fromList (zip (map fst xs) [1..])
 
+   -- reverse mapping of nodes back to coordinates, one per region
    locs = IntMap.fromList
           [ (n,coord) | (coord, n) <- Map.toList m
                       , gelem n g2 ]
@@ -74,39 +111,43 @@ buildGraph xs = (locs, g2)
                  , coord' <- Parser.neighbors1 coord
                  , coord' `Map.member` m ]
 
-   -- flood fill each node with its own color
+   -- graph with one node per colored region
    g2 = foldl' aux g1 (nodes g1)
 
+   -- collapse the region containing node @n@
    aux g n =
      case lab g n of
        Nothing -> g
-       Just c  -> ([], n, c, (,)() <$> newNeighbors) &
-                  delNodes region g
+       Just c  -> ([], n, c, (,)() <$> newNeighbors) & delNodes region g
          where
-            region = udfs [n] (labfilter (==c) g)
-            newNeighbors = nub (concatMap (Data.Graph.Inductive.neighbors g) region)
-                        \\ region
+           region = udfs [n] (labfilter (==c) g)
+           newNeighbors =
+             nub (concatMap (Data.Graph.Inductive.neighbors g) region)
+               \\ region
 
 
 -- | Render rows of colors using the given palette as a triangular grid.
-prettyKami :: Terminal -> Text {- ^ palette -} -> [[Int]] {- ^ colors -} -> String
-prettyKami term pal g =
-  unlines $ reverse (zipWith drawRow [0..] g) ++
+prettyKami :: Terminal -> PuzzleData -> String
+prettyKami term puz =
+  unlines $ reverse (zipWith drawRow [0..] (puzColors puz)) ++
             [columnLabels]
   where
-    w = maximum (map length g) `div` 2
     glyphs = "▲▼"
 
     drawRow i row =
       replicate i ' ' ++ intToDigit i : ' ' :
-      concat (zipWith (\s c -> withColor term pal c [s]) (cycle glyphs) row)
+      concat (zipWith (\s c -> withColor term (puzPalette puz) c [s])
+                      (cycle glyphs)
+                      row)
 
+    w = maximum (map length (puzColors puz)) `div` 2
     columnLabels = ' ' : concatMap showCol [0..w-1]
     showCol i | i < 10    = [' ', intToDigit i]
               | otherwise = ['₁', intToDigit (i-10)]
 
 
-palette :: Text -> Int -> Color
+-- | Mapping of palette names and color numbers to terminal colors
+palette :: Text {- ^ palette -} -> Int {- ^ color -} -> Color
 palette _ 0 = Black
 
 palette "Start" 1 = Cyan
@@ -155,6 +196,7 @@ palette _ 6 = Green
 palette _ 7 = Magenta
 
 palette _ n = error ("Unknown color: " ++ show n)
+
 
 -- | Print a period every 50 steps before returning the final value.
 printProgress :: Progress a -> IO a
