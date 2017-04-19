@@ -1,0 +1,40 @@
+%YAML 1.1
+  LevelNames:
+  - PageName: Start
+    Count: 6
+  - PageName: Rings
+    Count: 6
+  - PageName: Squares
+    Count: 6
+  - PageName: Simplestripe
+    Count: 6
+  - PageName: Wall
+    Count: 6
+  - PageName: Tritarg
+    Count: 6
+  - PageName: TriAgain
+    Count: 6
+  - PageName: Hexy
+    Count: 6
+  - PageName: Islands
+    Count: 6
+  - PageName: Reflect
+    Count: 6
+  - PageName: Corners
+    Count: 6
+  - PageName: Lines
+    Count: 6
+  - PageName: Nuc
+    Count: 6
+  - PageName: Threed
+    Count: 6
+  - PageName: Hatch
+    Count: 6
+  - PageName: SJoin
+    Count: 6
+  - PageName: Hardline
+    Count: 6
+  - PageName: Threegrid
+    Count: 6
+  - PageName: Bud
+    Count: 6
