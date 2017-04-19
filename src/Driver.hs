@@ -6,10 +6,12 @@ import           Control.Monad
 import           Data.Char
 import           Data.Foldable
 import           Data.List
+import           Data.Maybe
 import           Data.Text (Text)
 import           System.Environment
 import           System.Exit
 import           System.IO
+import           System.FilePath
 
 import           Data.Graph.Inductive
 import           Data.IntMap (IntMap)
@@ -41,10 +43,10 @@ processPuzzle term fn =
      putStrLn ""
 
      puz <- load fn
+     let pal = takeWhile isAlpha (takeBaseName fn)
      let (locations, g) = buildGraph (addCoordinates (puzColors puz))
 
-     putStrLn (prettyKami term puz)
-     putStrLn ("Palette: " ++ show (puzPalette puz))
+     putStrLn (prettyKami term pal puz)
      putStrLn ("Expected Moves: " ++ show (puzMoves puz))
      putStrLn ("Regions: " ++ show (noNodes g))
      putStrLn ("Connections: " ++ show (length (edges g)))
@@ -55,7 +57,7 @@ processPuzzle term fn =
        Nothing  -> failure "No solution"
        Just sol ->
          do putStrLn ("Solution: " ++ show (length sol))
-            putStrLn (renderSolution term (puzPalette puz) locations sol)
+            putStrLn (renderSolution term pal locations sol)
 
 
 -- | Print an error message and terminate the program.
@@ -65,7 +67,7 @@ failure err = hPutStrLn stderr err >> exitFailure
 
 renderSolution ::
   Terminal     {- ^ configured terminal       -} ->
-  Text         {- ^ palette name              -} ->
+  String       {- ^ palette name              -} ->
   IntMap Coord {- ^ map nodes to coordinates  -} ->
   [LNode Int]  {- ^ nodes labeled with colors -} ->
   String
@@ -78,7 +80,7 @@ renderSolution term pal locs sol =
 -- the requested color.
 withColor ::
   Terminal {- ^ configured terminal -} ->
-  Text     {- ^ palette name        -} ->
+  String   {- ^ palette name        -} ->
   Int      {- ^ color id            -} ->
   String   {- ^ content             -} ->
   String   {- ^ colored content     -}
@@ -86,6 +88,8 @@ withColor term pal c str =
   case getCapability term withForegroundColor of
     Just f  -> f (palette pal c) str
     Nothing -> str
+
+
 
 
 -- | Transform a list of coordinate/color pairs into a graph
@@ -129,8 +133,8 @@ buildGraph xs = (locs, g2)
 
 
 -- | Render rows of colors using the given palette as a triangular grid.
-prettyKami :: Terminal -> PuzzleData -> String
-prettyKami term puz =
+prettyKami :: Terminal -> String {- ^ palette -} -> PuzzleData -> String
+prettyKami term pal puz =
   unlines $ [replicate h ' ' ++ columnLabels ] ++
             reverse (zipWith drawRow [0..] (puzColors puz)) ++
             [columnLabels]
@@ -139,7 +143,7 @@ prettyKami term puz =
 
     drawRow i row =
       replicate i ' ' ++ intToDigit i : ' ' :
-      concat (zipWith (\s c -> withColor term (puzPalette puz) c [s])
+      concat (zipWith (\s c -> withColor term pal c [s])
                       (cycle glyphs)
                       row) ++ [' ', intToDigit i]
 
@@ -149,57 +153,33 @@ prettyKami term puz =
     showCol i | i < 10    = [' ', intToDigit i]
               | otherwise = ['₁', intToDigit (i-10)]
 
+palette :: String {- ^ palette -} -> Int {- ^ color id -} -> Color
+palette _    0 = Black
+palette name n = cycle p !! max 0 (n - 1)
+  where
+    p = maybe fallback (map ColorNumber) (lookup name palettes)
 
--- | Mapping of palette names and color numbers to terminal colors
-palette :: Text {- ^ palette -} -> Int {- ^ color -} -> Color
-palette _ 0 = Black
-
-palette "Start" 1 = Cyan
-palette "Start" 2 = Red
-palette "Start" 3 = Yellow
-
-palette "Squares" 6 = ColorNumber 0x13 -- navy
-palette "Squares" 5 = White
-palette "Squares" 2 = Cyan
-palette "Squares" 3 = ColorNumber 0xd0 -- orange
-
-palette "2Simplestripe" 6 = Blue
-palette "2Simplestripe" 4 = Blue
-palette "2Simplestripe" 2 = White
-palette "2Simplestripe" 1 = Red
-
-palette "Rings" 2 = Cyan
-palette "Rings" 3 = White
-palette "Rings" 1 = Red
-
-palette "Wall" 2 = ColorNumber 0x34 -- brown
-palette "Wall" 3 = ColorNumber 0x7d -- fucsia
-palette "Wall" 5 = Cyan
-palette "Wall" 6 = ColorNumber 0xd0 -- orange
-
-palette "Tritarg" 1 = Cyan
-palette "Tritarg" 2 = ColorNumber 0xd0 -- orange
-palette "Tritarg" 3 = Yellow
-palette "Tritarg" 6 = ColorNumber 0x13 -- navy
-
-palette "TriAgain" 1 = ColorNumber 0x34 -- brown
-palette "TriAgain" 2 = Cyan
-palette "TriAgain" 6 = Red
-
-palette "Hexy" 2 = ColorNumber 0x13 -- navy
-palette "Hexy" 3 = Cyan
-palette "Hexy" 5 = ColorNumber 0xd0 -- orange
-palette "Hexy" 6 = Red
-
-palette _ 1 = Cyan
-palette _ 2 = Red
-palette _ 3 = Yellow
-palette _ 4 = Blue
-palette _ 5 = Magenta
-palette _ 6 = Green
-palette _ 7 = Magenta
-
-palette _ n = error ("Unknown color: " ++ show n)
+    fallback = [Cyan, Red, Yellow, Blue, Magenta, Green, White]
+    palettes =
+      [("Bud"         ,[221,209,59 ,73 ,167,149])
+      ,("Corners"     ,[80 ,168,59 ,82 ,221,231])
+      ,("Hardline"    ,[114,59 ,203,203,95 ,221])
+      ,("Hatch"       ,[229,95 ,72 ,209,82 ,82 ])
+      ,("Hexy"        ,[47 ,59 ,122,47 ,215,167])
+      ,("Islands"     ,[203,151,59 ,82 ,47 ,229])
+      ,("Lines"       ,[95 ,221,60 ,224,73 ,83 ])
+      ,("Nuc"         ,[203,59 ,47 ,83 ,187,83 ])
+      ,("Reflect"     ,[72 ,230,59 ,47 ,47 ,203])
+      ,("Rings"       ,[167,72 ,223            ])
+      ,("Simplestripe",[203,188,47 ,59 ,74 ,59 ])
+      ,("SJoin"       ,[59 ,231,47 ,47 ,215,131])
+      ,("Squares"     ,[47 ,80 ,209,47 ,230,59 ])
+      ,("Start"       ,[66 ,131,215,230        ])
+      ,("Threed"      ,[83 ,203,95 ,79 ,82 ,83 ])
+      ,("Threegrid"   ,[60 ,144,167,73 ,231,47 ])
+      ,("TriAgain"    ,[59 ,79 ,47 ,47 ,59 ,203])
+      ,("Tritarg"     ,[72 ,209,221,83 ,47 ,60 ])
+      ,("Wall"        ,[47 ,59 ,168,83 ,79 ,215])]
 
 
 -- | Print a period every 50 steps before returning the final value.

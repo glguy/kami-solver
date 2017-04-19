@@ -28,18 +28,17 @@ import qualified Data.Text.Read as Text
 -- | Representation of the some of the components of a puzzle
 -- file.
 data PuzzleData = PuzzleData
-  { puzPalette :: Text    -- ^ name of the color palette
-  , puzMoves   :: !Int    -- ^ moves required for "perfect" solution
+  { puzMoves   :: !Int    -- ^ moves required for "perfect" solution
   , puzColors  :: [[Int]] -- ^ rows of color data
   } deriving (Read, Show, Eq, Ord)
 
 
--- | Load a puzzle file and parse out the palette, move count,
+-- | Load a puzzle file and parse out the move count
 -- and color information. Colors are grouped by rows.
 -- Upon failed puzzle parsing, a 'ParseError' will be raised.
 load ::
-  FilePath      {- ^ puzzle filename        -} ->
-  IO PuzzleData {- ^ palette, moves, colors -}
+  FilePath      {- ^ puzzle filename -} ->
+  IO PuzzleData {- ^ parsed puzzle   -}
 load fn =
   do res <- parse <$> Text.readFile fn
      case res of
@@ -88,7 +87,7 @@ parse ::
   Either ParseError PuzzleData
 parse str =
   case Text.splitOn "|" str of
-    "01":pal:_lowX:_lowY:width:uncLen:comDat:moves:_ ->
+    "01":_pal:_lowX:_lowY:width:uncLen:comDat:moves:_ ->
 
       do w <- parseNumber width
          l <- parseNumber uncLen
@@ -99,8 +98,7 @@ parse str =
 
          let colors = chunksOf (2*w) (map digitToInt dat)
 
-         return PuzzleData { puzPalette = pal
-                           , puzMoves   = m
+         return PuzzleData { puzMoves   = m
                            , puzColors  = colors }
 
     xs -> Left $! BadFields (length xs)
