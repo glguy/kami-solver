@@ -1,7 +1,7 @@
 {-# Language DeriveFunctor, BangPatterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Kami (KamiGraph, Color, solve, Progress(..)) where
+module Kami (KamiGraph, Color, solve, Progress(..), diameter) where
 
 import           Control.Monad
 import           Control.Monad.ST
@@ -12,6 +12,7 @@ import           Data.Hashable (Hashable(..))
 import qualified Data.IntSet as IntSet
 import           Data.List
 import           Data.Maybe
+import           Data.Word
 import qualified Data.Vector.Unboxed as V
 import qualified Data.PQueue.Prio.Min as P
 import qualified Data.Vector.Unboxed.Mutable as U
@@ -118,15 +119,8 @@ step limit (SearchEntry g path prev cost) =
 -- | Compute a lower-bound on the number of moves that a graph can be
 -- solved in.
 heuristic :: KamiGraph -> Int
-heuristic g = max ((diameter' g + 1) `div` 2)
+heuristic g = max ((diameter g + 1) `div` 2)
                   (colorsRemaining g - 1)
-
--- | Compute shortest path length between the two nodes that are furthest apart.
-diameter :: KamiGraph -> Int
-diameter g = maximum [ length p | n <- nodes g, p <- bft n g' ] - 1
-  where
-    -- create undirected graph
-    g' = gmap (\ (l,n,c,r) -> (l++r, n, c, l++r) ) g
 
 ------------------------------------------------------------------------
 
@@ -168,28 +162,45 @@ astarOn rep cost nexts start = go HashSet.empty (P.singleton 0 start)
 
 ------------------------------------------------------------------------
 
-diameter' :: Gr a b -> Int
-diameter' g
-  | noNodes g == 1 = 0
-diameter' g = runST $
-  do let (_,hi) = nodeRange g
-         n = hi + 1
-         ns = nodes g
-     a <- U.replicate (n*n) 1000
-     forM_ ns $ \u ->
-        do U.write a (u*n+u) (0::Int)
+-- | Compute shortest path length between the two nodes that are furthest apart.
+-- This implementation uses the Floyd-Warshal algorithm. In this implementation,
+-- each edge is assumed to have weight 1, and the graph is assumed to be
+-- undirected.
+--
+-- This implementation is only suitable for computing diameters up to 127.
+-- This allows me to save a lot of space, and for the puzzles I'm solving
+-- it's more than enough.
+diameter :: Gr a b -> Int
+diameter g | noNodes g <= 1 = 0
+diameter g =
+ let (lo,hi)  = nodeRange g
+     !n       = hi - lo + 1
+     !ns      = V.fromList (nodes g)
+     toIx i j = (i-lo) * n + (j-lo)
+ in runST $ do
+
+     -- initialize to maxBound/2 so that two of them can be added without overflow
+     a <- U.replicate (n*n) (maxBound `div` 2)
+       :: ST s (U.MVector s Word8)
+
+     -- set distances for each edge in graph to one
      forM_ (labEdges g) $ \(u,v,_) ->
-        do U.write a (u*n+v) (1::Int)
-           U.write a (v*n+u) (1::Int)
-     forM_ ns $ \k ->
-       forM_ ns $ \i ->
-         forM_ ns $ \j ->
-           do ij <- U.read a (i*n+j)
-              ik <- U.read a (i*n+k)
-              kj <- U.read a (k*n+j)
-              when (ij > ik+kj) (U.write a (i*n+j) (ik+kj))
-     maximum <$> sequence
-        [ U.read a (i*n+j) | i:js <- tails ns, j <- js]
+        do U.unsafeWrite a (toIx u v) 1
+           U.unsafeWrite a (toIx v u) 1
+
+     -- set distance to self to zero
+     V.forM_ ns $ \u -> U.unsafeWrite a (toIx u u) 0
+
+     V.forM_ ns $ \k ->
+       V.forM_ ns $ \i ->
+         V.forM_ ns $ \j ->
+           do ij <- U.unsafeRead a (toIx i j)
+              ik <- U.unsafeRead a (toIx i k)
+              kj <- U.unsafeRead a (toIx k j)
+              when (ij > ik+kj) (U.unsafeWrite a (toIx i j) (ik + kj))
+
+     fromIntegral . maximum <$> sequence
+        [ U.unsafeRead a (toIx i j) | i:js <- tails (nodes g), j <- js]
 
 
 ------------------------------------------------------------------------

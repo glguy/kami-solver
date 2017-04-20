@@ -7,7 +7,6 @@ import           Data.Char
 import           Data.Foldable
 import           Data.List
 import           Data.Maybe
-import           Data.Text (Text)
 import           System.Environment
 import           System.Exit
 import           System.IO
@@ -141,9 +140,6 @@ renumber (m,g) =
   where
     ns  = nodes g
     f n = fromJust (elemIndex n ns)
-
-    aux (es1, n, c, es2) = (aux1 es1, f n, c, aux1 es2)
-    aux1 = map $ \(x,y) -> (x, f y)
 
 
 -- | Render rows of colors using the given palette as a triangular grid.
