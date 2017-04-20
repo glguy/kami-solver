@@ -44,7 +44,8 @@ processPuzzle term fn =
 
      puz <- load fn
      let pal = takeWhile isAlpha (takeBaseName fn)
-     let (locations, g) = buildGraph (addCoordinates (puzColors puz))
+     let (locations, g) = renumber
+                        $ buildGraph (addCoordinates (puzColors puz))
 
      putStrLn (prettyKami term pal puz)
      putStrLn ("Expected Moves: " ++ show (puzMoves puz))
@@ -132,6 +133,19 @@ buildGraph xs = (locs, g2)
                \\ region
 
 
+renumber :: (IntMap a, KamiGraph) -> (IntMap a, KamiGraph)
+renumber (m,g) =
+  ( IntMap.fromList [ (f k, v) | (k,v) <- IntMap.toList m ]
+  , mkGraph [ (f n, c) | (n,c) <- labNodes g ]
+            [ (f x, f y, z) | (x,y,z) <- labEdges g] )
+  where
+    ns  = nodes g
+    f n = fromJust (elemIndex n ns)
+
+    aux (es1, n, c, es2) = (aux1 es1, f n, c, aux1 es2)
+    aux1 = map $ \(x,y) -> (x, f y)
+
+
 -- | Render rows of colors using the given palette as a triangular grid.
 prettyKami :: Terminal -> String {- ^ palette -} -> PuzzleData -> String
 prettyKami term pal puz =
@@ -163,7 +177,7 @@ palette name n = cycle p !! max 0 (n - 1)
     palettes =
       [("Bud"         ,[221,209,59 ,73 ,167,149])
       ,("Corners"     ,[80 ,168,59 ,82 ,221,231])
-      ,("Hardline"    ,[114,59 ,203,203,95 ,221])
+      ,("Hardline"    ,[114,59 ,203,203,124,221])
       ,("Hatch"       ,[229,95 ,72 ,209,82 ,82 ])
       ,("Hexy"        ,[47 ,59 ,122,47 ,215,167])
       ,("Islands"     ,[203,151,59 ,82 ,47 ,229])

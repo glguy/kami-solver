@@ -3,6 +3,8 @@
 
 module Kami (KamiGraph, Color, solve, Progress(..)) where
 
+import           Control.Monad
+import           Control.Monad.ST
 import           Control.Parallel.Strategies
 import           Data.Graph.Inductive
 import qualified Data.HashSet as HashSet
@@ -12,6 +14,7 @@ import           Data.List
 import           Data.Maybe
 import qualified Data.Vector.Unboxed as V
 import qualified Data.PQueue.Prio.Min as P
+import qualified Data.Vector.Unboxed.Mutable as U
 
 type Color = Int
 type KamiGraph = Gr Color ()
@@ -115,7 +118,7 @@ step limit (SearchEntry g path prev cost) =
 -- | Compute a lower-bound on the number of moves that a graph can be
 -- solved in.
 heuristic :: KamiGraph -> Int
-heuristic g = max ((diameter g + 1) `div` 2)
+heuristic g = max ((diameter' g + 1) `div` 2)
                   (colorsRemaining g - 1)
 
 -- | Compute shortest path length between the two nodes that are furthest apart.
@@ -162,6 +165,31 @@ astarOn rep cost nexts start = go HashSet.empty (P.singleton 0 start)
 
             addWork w (x',h) =
               P.insert (cost x' + h) x' w
+
+------------------------------------------------------------------------
+
+diameter' :: Gr a b -> Int
+diameter' g
+  | noNodes g == 1 = 0
+diameter' g = runST $
+  do let (_,hi) = nodeRange g
+         n = hi + 1
+         ns = nodes g
+     a <- U.replicate (n*n) 1000
+     forM_ ns $ \u ->
+        do U.write a (u*n+u) (0::Int)
+     forM_ (labEdges g) $ \(u,v,_) ->
+        do U.write a (u*n+v) (1::Int)
+           U.write a (v*n+u) (1::Int)
+     forM_ ns $ \k ->
+       forM_ ns $ \i ->
+         forM_ ns $ \j ->
+           do ij <- U.read a (i*n+j)
+              ik <- U.read a (i*n+k)
+              kj <- U.read a (k*n+j)
+              when (ij > ik+kj) (U.write a (i*n+j) (ik+kj))
+     maximum <$> sequence
+        [ U.read a (i*n+j) | i:js <- tails ns, j <- js]
 
 
 ------------------------------------------------------------------------
