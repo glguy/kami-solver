@@ -1,10 +1,8 @@
-{-# Language DeriveFunctor, BangPatterns #-}
+{-# Language ForeignFunctionInterface, DeriveFunctor, BangPatterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Kami (KamiGraph, Color, solve, Progress(..), diameter) where
+module Kami (KamiGraph, Color, Progress(..), solve) where
 
-import           Control.Monad
-import           Control.Monad.ST
 import           Control.Parallel.Strategies
 import           Data.Graph.Inductive
 import qualified Data.HashSet as HashSet
@@ -12,10 +10,11 @@ import           Data.Hashable (Hashable(..))
 import qualified Data.IntSet as IntSet
 import           Data.List
 import           Data.Maybe
-import           Data.Word
 import qualified Data.Vector.Unboxed as V
 import qualified Data.PQueue.Prio.Min as P
-import qualified Data.Vector.Unboxed.Mutable as U
+
+import           Foreign (Ptr, withArrayLen)
+import           System.IO.Unsafe (unsafePerformIO)
 
 type Color = Int
 type KamiGraph = Gr Color ()
@@ -63,7 +62,7 @@ solve ::
 solve goal
   = (fmap . fmap) (reverse . searchPath)
   . progressFind (isSolved . searchGraph)
-  . astarOn summary searchCost (step goal)
+  . astarOn summary searchCost (heuristic . searchGraph) goal (step goal)
   . initialEntry
 
 -- | Characterization of a particular search state used to eliminate unneeded
@@ -86,27 +85,19 @@ adjacentColors g m = nub [ c | Just c <- lab g <$> neighbors g m ]
 -- with the cost of the step and the lower-bound estimate of the number of
 -- moves remaining until a solution.
 step ::
-  Int                  {- ^ solution length                -} ->
-  SearchEntry          {- ^ current search state           -} ->
-  [(SearchEntry, Int)] {- ^ (next search state, heuristic) -}
-step limit (SearchEntry g path prev cost) =
-
-  -- prune search states that will necessarily exceed the goal
-  -- This happens outside of the generator to allow the
-  -- heuristics to be computed in parallel.
-  filter (\(e,h) -> searchCost e + h <= limit) $
-
-  -- compute the heuristics for the next states in parallel
-  withStrategy (parList rseq) $
+  Int           {- ^ solution length      -} ->
+  SearchEntry   {- ^ current search state -} ->
+  [SearchEntry] {- ^ next search state    -}
+step limit (SearchEntry g path prev cost)
+  | cost >= limit = []
+  | otherwise     =
 
   applyMove <$> if prev == 0 then initialMoveSet else forwardMoveSet prev
 
   where
-    applyMove (n,c) = (entry, h)
+    applyMove (n,c) = SearchEntry g' ((n,c):path) n (cost + 1)
       where
-        g'         = changeColor n c g
-        !h         = heuristic g'
-        !entry     = SearchEntry g' ((n,c):path) n (cost + 1)
+        g' = changeColor n c g
 
     initialMoveSet =
       [ (n,c) | n <- nodes g, c <- adjacentColors g n ]
@@ -139,12 +130,14 @@ heuristic g = max ((diameter g + 1) `div` 2)
 astarOn ::
   Hashable b =>
   Ord b      =>
-  (a -> b)         {- ^ state characterization -} ->
-  (a -> Int)       {- ^ cost characterization  -} ->
-  (a -> [(a,Int)]) {- ^ step function          -} ->
-  a                {- ^ initial state          -} ->
-  [a]              {- ^ reachable states       -}
-astarOn rep cost nexts start = go HashSet.empty (P.singleton 0 start)
+  (a -> b)   {- ^ state characterization -} ->
+  (a -> Int) {- ^ cost characterization  -} ->
+  (a -> Int) {- ^ heuristic              -} ->
+  Int        {- ^ limit                  -} ->
+  (a -> [a]) {- ^ step function          -} ->
+  a          {- ^ initial state          -} ->
+  [a]        {- ^ reachable states       -}
+astarOn rep cost heur !limit nexts start = go HashSet.empty (P.singleton 0 start)
   where
     go seen work =
       case P.minView work of
@@ -155,55 +148,32 @@ astarOn rep cost nexts start = go HashSet.empty (P.singleton 0 start)
           where
             r     = rep x
             seen' = HashSet.insert r seen
-            work2 = foldl' addWork work1 (nexts x)
+            work2 = foldl' addWork work1
+                   $ parMap (evalTuple2 r0 rseq)
+                       (\e -> (e, heur e))
+                       (nexts x)
 
-            addWork w (x',h) =
-              P.insert (cost x' + h) x' w
-
-------------------------------------------------------------------------
-
--- | Compute shortest path length between the two nodes that are furthest apart.
--- This implementation uses the Floyd-Warshal algorithm. In this implementation,
--- each edge is assumed to have weight 1, and the graph is assumed to be
--- undirected.
---
--- This implementation is only suitable for computing diameters up to 127.
--- This allows me to save a lot of space, and for the puzzles I'm solving
--- it's more than enough.
-diameter :: Gr a b -> Int
-diameter g | noNodes g <= 1 = 0
-diameter g =
- let (lo,hi)  = nodeRange g
-     !n       = hi - lo + 1
-     !ns      = V.fromList (nodes g)
-     toIx i j = (i-lo) * n + (j-lo)
- in runST $ do
-
-     -- initialize to maxBound/2 so that two of them can be added without overflow
-     a <- U.replicate (n*n) (maxBound `div` 2)
-       :: ST s (U.MVector s Word8)
-
-     -- set distances for each edge in graph to one
-     forM_ (labEdges g) $ \(u,v,_) ->
-        do U.unsafeWrite a (toIx u v) 1
-           U.unsafeWrite a (toIx v u) 1
-
-     -- set distance to self to zero
-     V.forM_ ns $ \u -> U.unsafeWrite a (toIx u u) 0
-
-     V.forM_ ns $ \k ->
-       V.forM_ ns $ \i ->
-         V.forM_ ns $ \j ->
-           do ij <- U.unsafeRead a (toIx i j)
-              ik <- U.unsafeRead a (toIx i k)
-              kj <- U.unsafeRead a (toIx k j)
-              when (ij > ik+kj) (U.unsafeWrite a (toIx i j) (ik + kj))
-
-     fromIntegral . maximum <$> sequence
-        [ U.unsafeRead a (toIx i j) | i:js <- tails (nodes g), j <- js]
-
+            addWork w (x',h)
+              | prio > limit = w
+              | otherwise    = P.insert (cost x' + h) x' w
+              where prio = cost x' + h
 
 ------------------------------------------------------------------------
 
 instance (V.Unbox a, Hashable a) => Hashable (V.Vector a) where
   hashWithSalt salt v = hashWithSalt salt (V.toList v)
+
+------------------------------------------------------------------------
+
+foreign import ccall "graph_diameter" c_graph_diameter ::
+  Ptr Int -> Int -> Ptr Int -> Int -> IO Int
+
+diameter :: KamiGraph -> Int
+diameter g =
+  let es = [x | (i,j) <- edges g, x <- [i,j]]
+      ns = nodes g
+  in
+  unsafePerformIO $
+  withArrayLen ns $ \nodesLen nodesPtr ->
+  withArrayLen es $ \edgesLen edgesPtr ->
+  c_graph_diameter nodesPtr nodesLen edgesPtr edgesLen
