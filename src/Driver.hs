@@ -19,7 +19,7 @@ import qualified Data.Map as Map
 
 import           System.Console.Terminfo
                     (Terminal, Color(..), setupTermFromEnv,
-                     getCapability, withForegroundColor)
+                     getCapability, withForegroundColor, carriageReturn)
 
 import           Kami (KamiGraph, solve, Progress(..))
 import           Parser
@@ -54,7 +54,9 @@ processPuzzle term fn =
      putStrLn ("Regions: " ++ show (noNodes g))
      putStrLn ("Connections: " ++ show (length (edges g)))
 
-     mb <- printProgress (solve (puzMoves puz) g)
+     mb <- printProgress term
+         $ scaleProgress 100
+         $ solve (puzMoves puz) g
 
      case mb of
        Nothing  -> failure "No solution"
@@ -194,11 +196,22 @@ palette name n = cycle p !! max 0 (n - 1)
       ,("Tritarg"     ,[72 ,209,221,83 ,47 ,60 ])
       ,("Wall"        ,[47 ,59 ,168,83 ,79 ,215])]
 
+scaleProgress :: Int -> Progress a -> Progress a
+scaleProgress n = go 1
+  where
+    go _ (Done x)             = Done x
+    go i (Step x) | i >= n    = Step (go 1 x)
+                  | otherwise = go (i+1) x
 
 -- | Print a period every 50 steps before returning the final value.
-printProgress :: Progress a -> IO a
-printProgress = go (0 :: Int)
+printProgress :: Terminal -> Progress a -> IO a
+printProgress term = go 1
   where
-    go _  (Done x) = x <$ putStrLn ""
-    go 50 x        = putChar '.' >> hFlush stdout >> go 0 x
-    go i  (Step x) = go (i+1) x
+    cr = fromMaybe "\n" (getCapability term carriageReturn)
+
+    go _ (Done x) = x <$ putStrLn ""
+    go i (Step x) =
+      do let n = i `rem` 10
+         putStr (cr ++ replicate n '▓' ++ replicate (9-n) '░' ++ ' ' : show i)
+         hFlush stdout
+         go (i+1) x
