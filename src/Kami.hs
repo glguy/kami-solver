@@ -42,21 +42,20 @@ data SearchEntry = SearchEntry
   , searchCost  :: !Int          -- ^ cached length of 'searchPath'
   }
 
-searchGraph :: KamiGraph -> SearchEntry -> KamiGraph
-searchGraph g e =
-  foldl' (\acc (n,c) -> changeColor n c acc) g (reverse (searchPath e))
 
-initialEntry :: SearchEntry
-initialEntry = SearchEntry [] 0
+-- | Rebuild the game graph given the starting arrangement and a list of moves.
+-- Rebuilding this graph allows the work queue to only contain the move list
+-- which results in much less memory consumption. Rebuilding the graph is a
+-- small portion of the computation cost of searching for a solution.
+rebuildGraph :: KamiGraph -> SearchEntry -> KamiGraph
+rebuildGraph g e = foldr (uncurry changeColor) g (searchPath e)
 
 
 solve ::
-  Int                            {- ^ target solution length -} ->
-  KamiGraph                      {- ^ initial graph          -} ->
-  Progress (Maybe [LNode Color]) {- ^ solution               -}
-solve goal g
-  = (fmap . fmap) (reverse . searchPath)
-  $ astar goal g
+  Int                            {- ^ solution length limit -} ->
+  KamiGraph                      {- ^ initial graph         -} ->
+  Progress (Maybe [LNode Color]) {- ^ solution              -}
+solve limit g = (fmap . fmap) (reverse . searchPath) (astar limit g)
 
 -- | Characterization of a particular search state used to eliminate unneeded
 -- duplicate states.
@@ -121,6 +120,8 @@ heuristic g = max ((diameter g + 1) `div` 2)
 astar :: Int -> KamiGraph -> Progress (Maybe SearchEntry)
 astar !limit start = go HashSet.empty (P.singleton 0 initialEntry)
   where
+    initialEntry = SearchEntry [] 0
+
     go seen work =
       case P.minView work of
         Nothing                   -> Done Nothing
@@ -130,7 +131,7 @@ astar !limit start = go HashSet.empty (P.singleton 0 initialEntry)
           | otherwise             -> Step (go seen' work2)
           where
             r     = summary g
-            g     = searchGraph start x
+            g     = rebuildGraph start x
             seen' = HashSet.insert r seen
             work2 = foldl' addWork work1 (step g limit x)
 
@@ -149,6 +150,7 @@ instance (V.Unbox a, Hashable a) => Hashable (V.Vector a) where
 foreign import ccall "graph_diameter" c_graph_diameter ::
   Ptr Int -> Int -> Ptr Int -> Int -> IO Int
 
+-- | Compute graph diameter using Floyd-Warshal algorithm.
 diameter :: KamiGraph -> Int
 diameter g =
   unsafePerformIO $

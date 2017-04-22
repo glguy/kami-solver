@@ -1,7 +1,7 @@
 name:                kami-solver
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            Solver for the KAMI 2 puzzles
+description:         Solver for the KAMI 2 puzzles
 license:             ISC
 license-file:        LICENSE
 author:              Eric Mertens

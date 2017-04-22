@@ -6,6 +6,7 @@ import           Control.Monad
 import           Data.Char
 import           Data.Foldable
 import           Data.List
+import           Data.List.Split (chunksOf)
 import           Data.Maybe
 import           System.Environment
 import           System.Exit
@@ -62,7 +63,7 @@ processPuzzle term fn =
        Nothing  -> failure "No solution"
        Just sol ->
          do putStrLn ("Solution: " ++ show (length sol))
-            putStrLn (renderSolution term pal locations sol)
+            putStr (renderSolution term pal locations sol)
 
 
 -- | Print an error message and terminate the program.
@@ -70,15 +71,17 @@ failure :: String {- ^ message -} -> IO a
 failure err = hPutStrLn stderr err >> exitFailure
 
 
+-- | Render a solution using the coordinates colored appropriately for
+-- the move. Split up the moves 10 per line.
 renderSolution ::
   Terminal     {- ^ configured terminal       -} ->
   String       {- ^ palette name              -} ->
   IntMap Coord {- ^ map nodes to coordinates  -} ->
   [LNode Int]  {- ^ nodes labeled with colors -} ->
   String
-renderSolution term pal locs sol =
-  intercalate ", "
-    [ withColor term pal c (renderCoord (locs IntMap.! n)) | (n,c) <- sol]
+renderSolution term pal locs sol = unlines (intercalate ", " <$> chunksOf 10 steps)
+  where
+    steps = [ withColor term pal c (renderCoord (locs IntMap.! n)) | (n,c) <- sol]
 
 
 -- | Wrap a content string with the control codes to give it
