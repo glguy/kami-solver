@@ -1,4 +1,4 @@
-{-# Language OverloadedStrings #-}
+{-# Language BangPatterns, OverloadedStrings #-}
 
 module Parser
   ( -- * Coordinates
@@ -10,6 +10,7 @@ module Parser
   , PuzzleData(..)
   , load
   , addCoordinates
+  , removeBlanks
 
     -- * Errors
   , ParseError(..)
@@ -18,18 +19,22 @@ module Parser
 import           Control.Exception
 import           Control.Monad
 import           Data.Char
+import           Data.Function
+import           Data.List
 import           Data.List.Split
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 import qualified Data.Text.Read as Text
+import           Text.Read
 
 
 -- | Representation of the some of the components of a puzzle
 -- file.
 data PuzzleData = PuzzleData
   { puzMoves   :: !Int    -- ^ moves required for "perfect" solution
-  , puzColors  :: [[Int]] -- ^ rows of color data
+  , puzTiles   :: [[Int]] -- ^ rows of color data
+  , puzSolution :: [(Int,Int)] -- ^ indexes of location and color
   } deriving (Read, Show, Eq, Ord)
 
 
@@ -73,8 +78,10 @@ addCoordinates xss =
   [ (C r c s, tri)
          | (r,row) <- zip [0..] xss
          , (c,squ) <- zip [0..] (chunksOf 2 row)
-         , (s,tri) <- zip [0,1] squ
-         , tri /= 0 ]
+         , (s,tri) <- zip [0,1] squ ]
+
+removeBlanks :: [(Coord, Int)] -> [(Coord, Int)]
+removeBlanks = filter $ \x -> snd x /= 0
 
 -- | single direction neighbors for building less redundant graph
 neighbors1 :: Coord -> [Coord]
@@ -87,7 +94,7 @@ parse ::
   Either ParseError PuzzleData
 parse str =
   case Text.splitOn "|" str of
-    "01":_pal:_lowX:_lowY:width:uncLen:comDat:moves:_ ->
+    "01":_pal:_lowX:_lowY:width:uncLen:comDat:moves:extra ->
 
       do w <- parseNumber width
          l <- parseNumber uncLen
@@ -96,10 +103,15 @@ parse str =
 
          unless (length dat == l) (Left DecompressionFailure)
 
-         let colors = chunksOf (2*w) (map digitToInt dat)
+         let tiles    = chunksOf (2*w) (map digitToInt dat)
+             solution = case extra of
+                          _:_:encSolution:_
+                            | Just sln <- decodeSolution (Text.unpack encSolution) -> sln
+                          _ -> []
 
-         return PuzzleData { puzMoves   = m
-                           , puzColors  = colors }
+         return PuzzleData { puzMoves    = m
+                           , puzTiles    = tiles
+                           , puzSolution = solution }
 
     xs -> Left $! BadFields (length xs)
 
@@ -116,3 +128,14 @@ uncompress (c:m:xs) | isAsciiLower m =
   replicate (ord m - ord 'a' + 3) c ++ uncompress xs
 uncompress (c:xs) = c : uncompress xs
 uncompress [] = []
+
+decodeSolution :: String -> Maybe [(Int,Int)]
+decodeSolution = go . groupBy ((==)`on`isDigit)
+  where
+    go [] = Just []
+    go (nstr:[cchr]:strs) =
+       do n <- readMaybe nstr
+          let !c = ord cchr - ord 'A'
+          xs <- go strs
+          Just ((n,c):xs)
+    go _ = Nothing

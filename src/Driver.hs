@@ -44,7 +44,10 @@ processPuzzle term fn =
      puz <- load fn
      let pal = takeWhile isAlpha (takeBaseName fn)
      let (locations, g) = renumber
-                        $ buildGraph (addCoordinates (puzColors puz))
+                        $ buildGraph
+                        $ removeBlanks
+                        $ addCoordinates
+                        $ puzTiles puz
 
      putStrLn (prettyKami term pal puz)
      putStrLn ("Expected Moves: " ++ show (puzMoves puz))
@@ -146,7 +149,7 @@ renumber (m,g) =
 prettyKami :: Terminal -> String {- ^ palette -} -> PuzzleData -> String
 prettyKami term pal puz =
   unlines $ [replicate h ' ' ++ columnLabels ] ++
-            reverse (zipWith drawRow [0..] (puzColors puz)) ++
+            reverse (zipWith drawRow [0..] (puzTiles puz)) ++
             [columnLabels]
   where
     glyphs = "▲▼"
@@ -157,8 +160,8 @@ prettyKami term pal puz =
                       (cycle glyphs)
                       row) ++ [' ', intToDigit i]
 
-    h = length (puzColors puz)
-    w = maximum (map length (puzColors puz)) `div` 2
+    h = length (puzTiles puz)
+    w = maximum (map length (puzTiles puz)) `div` 2
     columnLabels = ' ' : concatMap showCol [0..w-1]
     showCol i | i < 10    = [' ', intToDigit i]
               | otherwise = ['₁', intToDigit (i-10)]

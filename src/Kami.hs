@@ -21,13 +21,6 @@ type KamiGraph = Gr Color ()
 
 data Progress a = Step (Progress a) | Done a deriving Functor
 
-
-progressFind :: (a -> Bool) -> [a] -> Progress (Maybe a)
-progressFind _ [] = Done Nothing
-progressFind p (x:xs)
-  | p x       = Done (Just x)
-  | otherwise = Step (progressFind p xs)
-
 ------------------------------------------------------------------------
 
 isSolved :: KamiGraph -> Bool
@@ -45,30 +38,30 @@ changeColor n c g = ([], n, c, (,)() <$> newNeighbors) & delNodes (n:mergeNodes)
       \\ (n:mergeNodes)
 
 data SearchEntry = SearchEntry
-  { searchGraph :: KamiGraph     -- ^ current graph
-  , searchPath  :: [LNode Color] -- ^ list of updates so far in reverse order
-  , _searchLast :: !Node         -- ^ previous node updated or @0@
+  { searchPath  :: [LNode Color] -- ^ list of updates so far in reverse order
   , searchCost  :: !Int          -- ^ cached length of 'searchPath'
   }
 
-initialEntry :: KamiGraph -> SearchEntry
-initialEntry g = SearchEntry g [] 0 0
+searchGraph :: KamiGraph -> SearchEntry -> KamiGraph
+searchGraph g e =
+  foldl' (\acc (n,c) -> changeColor n c acc) g (reverse (searchPath e))
+
+initialEntry :: SearchEntry
+initialEntry = SearchEntry [] 0
 
 
 solve ::
   Int                            {- ^ target solution length -} ->
   KamiGraph                      {- ^ initial graph          -} ->
   Progress (Maybe [LNode Color]) {- ^ solution               -}
-solve goal
+solve goal g
   = (fmap . fmap) (reverse . searchPath)
-  . progressFind (isSolved . searchGraph)
-  . astarOn summary searchCost (heuristic . searchGraph) goal (step goal)
-  . initialEntry
+  $ astar goal g
 
 -- | Characterization of a particular search state used to eliminate unneeded
 -- duplicate states.
-summary :: SearchEntry -> V.Vector Int
-summary (SearchEntry g _ p _) = V.fromList (p : concat [ [x,y] | (x,y) <- labNodes g ])
+summary :: KamiGraph -> V.Vector Int
+summary g = V.fromList (concat [ [x,y] | (x,y) <- labNodes g ])
 
 -- | Compute the number of unique colors remaining in the graph.
 colorsRemaining :: KamiGraph -> Int
@@ -85,19 +78,24 @@ adjacentColors g m = nub [ c | Just c <- lab g <$> neighbors g m ]
 -- with the cost of the step and the lower-bound estimate of the number of
 -- moves remaining until a solution.
 step ::
-  Int           {- ^ solution length      -} ->
-  SearchEntry   {- ^ current search state -} ->
-  [SearchEntry] {- ^ next search state    -}
-step limit (SearchEntry g path prev cost)
+  KamiGraph ->
+  Int                 {- ^ solution length                       -} ->
+  SearchEntry         {- ^ current search state                  -} ->
+  [(SearchEntry,Int)] {- ^ next search state and heuristic value -}
+step g limit (SearchEntry path cost)
   | cost >= limit = []
   | otherwise     =
 
-  applyMove <$> if prev == 0 then initialMoveSet else forwardMoveSet prev
+  withStrategy (parList (evalTuple2 r0 rseq)) $
+  applyMove <$> case path of
+                  []         -> initialMoveSet
+                  (prev,_):_ -> forwardMoveSet prev
 
   where
-    applyMove (n,c) = SearchEntry g' ((n,c):path) n (cost + 1)
+    applyMove (n,c) = (SearchEntry ((n,c):path) (cost + 1), h)
       where
         g' = changeColor n c g
+        h  = heuristic g'
 
     initialMoveSet =
       [ (n,c) | n <- nodes g, c <- adjacentColors g n ]
@@ -115,48 +113,31 @@ heuristic g = max ((diameter g + 1) `div` 2)
 
 ------------------------------------------------------------------------
 
--- | Implementation of A*.
+-- | Implementation of A* search to find a solution to a KAMI puzzle.
 --
--- The state characterization function is used to compute a value that will be
--- used to eliminate duplicate states from the search.
---
--- The step function should return all possible successor states of a given
--- state and an estimate of the cost of the remaining
--- steps needed to find the solution. This estimate must not exceed the actual
--- cost.
---
--- The resulting list of reachable states will be annotated with their cost and
--- will be in ascending order of cost.
-astarOn ::
-  Hashable b =>
-  Ord b      =>
-  (a -> b)   {- ^ state characterization -} ->
-  (a -> Int) {- ^ cost characterization  -} ->
-  (a -> Int) {- ^ heuristic              -} ->
-  Int        {- ^ limit                  -} ->
-  (a -> [a]) {- ^ step function          -} ->
-  a          {- ^ initial state          -} ->
-  [a]        {- ^ reachable states       -}
-astarOn rep cost heur !limit nexts start = go HashSet.empty (P.singleton 0 start)
+-- A* prioritizes path possibilities by choosing those that have the
+-- minimum estimate of the lower-bound on the solution length starting
+-- from a particular search state.
+astar :: Int -> KamiGraph -> Progress (Maybe SearchEntry)
+astar !limit start = go HashSet.empty (P.singleton 0 initialEntry)
   where
     go seen work =
       case P.minView work of
-        Nothing -> []
+        Nothing                   -> Done Nothing
         Just (x,work1)
+          | isSolved g            -> Done (Just x)
           | HashSet.member r seen -> go seen work1
-          | otherwise             -> x : go seen' work2
+          | otherwise             -> Step (go seen' work2)
           where
-            r     = rep x
+            r     = summary g
+            g     = searchGraph start x
             seen' = HashSet.insert r seen
-            work2 = foldl' addWork work1
-                   $ parMap (evalTuple2 r0 rseq)
-                       (\e -> (e, heur e))
-                       (nexts x)
+            work2 = foldl' addWork work1 (step g limit x)
 
             addWork w (x',h)
               | prio > limit = w
-              | otherwise    = P.insert (cost x' + h) x' w
-              where prio = cost x' + h
+              | otherwise    = P.insert prio x' w
+              where prio = searchCost x' + h
 
 ------------------------------------------------------------------------
 
@@ -170,10 +151,11 @@ foreign import ccall "graph_diameter" c_graph_diameter ::
 
 diameter :: KamiGraph -> Int
 diameter g =
-  let es = [x | (i,j) <- edges g, x <- [i,j]]
-      ns = nodes g
-  in
   unsafePerformIO $
   withArrayLen ns $ \nodesLen nodesPtr ->
   withArrayLen es $ \edgesLen edgesPtr ->
   c_graph_diameter nodesPtr nodesLen edgesPtr edgesLen
+
+  where
+    es = [x | (i,j) <- edges g, x <- [i,j]] -- flat list of edges
+    ns = nodes g                            -- ordered list of node ids
