@@ -118,7 +118,7 @@ heuristic g = max ((diameter g + 1) `div` 2)
 -- minimum estimate of the lower-bound on the solution length starting
 -- from a particular search state.
 astar :: Int -> KamiGraph -> Progress (Maybe SearchEntry)
-astar !limit start = go HashSet.empty (P.singleton 0 initialEntry)
+astar !limit start = go HashSet.empty (P.singleton minBound initialEntry)
   where
     initialEntry = SearchEntry [] 0
 
@@ -137,8 +137,28 @@ astar !limit start = go HashSet.empty (P.singleton 0 initialEntry)
 
             addWork w (x',h)
               | prio > limit = w
-              | otherwise    = P.insert prio x' w
-              where prio = searchCost x' + h
+              | otherwise    = P.insert (Priority prio c) x' w
+              where prio = c + h
+                    c    = searchCost x'
+
+------------------------------------------------------------------------
+
+-- | This priority type considers elements small if their first component
+-- is small, and in the case of a tie prefers the element with the larger
+-- second component. This type will be used to prioritize the search queue
+-- for minimizing the lower-bound on the solution length but maximizing
+-- the depth searched.
+data Priority = Priority !Int !Int -- heuristic cost
+  deriving (Read, Show, Eq)
+
+instance Bounded Priority where
+  minBound = Priority minBound maxBound
+  maxBound = Priority maxBound minBound
+
+-- | Normal order on first component, reversed order on second component
+instance Ord Priority where
+  compare (Priority h1 c1) (Priority h2 c2) =
+    compare h1 h2 `mappend` compare c2 c1
 
 ------------------------------------------------------------------------
 
