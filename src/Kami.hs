@@ -1,7 +1,7 @@
 {-# Language ForeignFunctionInterface, DeriveFunctor, BangPatterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Kami (KamiGraph, Color, Progress(..), solve) where
+module Kami (KamiGraph, TileColor(..), Progress(..), solve) where
 
 import           Control.Parallel.Strategies
 import           Data.Graph.Inductive
@@ -16,10 +16,11 @@ import qualified Data.PQueue.Prio.Min as P
 import           Foreign (Ptr, withArrayLen)
 import           System.IO.Unsafe (unsafePerformIO)
 
-type Color = Int
-type KamiGraph = Gr Color ()
+newtype TileColor = TileColor { tileColorId :: Int } deriving (Read, Show, Eq, Ord)
+type KamiGraph = Gr TileColor ()
 
-data Progress a = Step (Progress a) | Done a deriving Functor
+data Progress a = Step (Progress a) | Done a
+  deriving (Read, Show, Functor)
 
 ------------------------------------------------------------------------
 
@@ -28,7 +29,7 @@ isSolved g = 1 == noNodes g
 
 -- | Assign a new color to a node and merge all connected nodes matching
 -- the new color
-changeColor :: Node -> Color -> KamiGraph -> KamiGraph
+changeColor :: Node -> TileColor -> KamiGraph -> KamiGraph
 changeColor n c g = ([], n, c, (,)() <$> newNeighbors) & delNodes (n:mergeNodes) g
   where
     (mergeNodes, keepNodes) = partition (\m -> Just c == lab g m) (neighbors g n)
@@ -38,9 +39,12 @@ changeColor n c g = ([], n, c, (,)() <$> newNeighbors) & delNodes (n:mergeNodes)
       \\ (n:mergeNodes)
 
 data SearchEntry = SearchEntry
-  { searchPath  :: [LNode Color] -- ^ list of updates so far in reverse order
+  { searchPath  :: [LNode TileColor] -- ^ list of updates so far in reverse order
   , searchCost  :: !Int          -- ^ cached length of 'searchPath'
-  }
+  } deriving (Read, Show)
+
+initialEntry :: SearchEntry
+initialEntry = SearchEntry [] 0
 
 
 -- | Rebuild the game graph given the starting arrangement and a list of moves.
@@ -52,24 +56,24 @@ rebuildGraph g e = foldr (uncurry changeColor) g (searchPath e)
 
 
 solve ::
-  Int                            {- ^ solution length limit -} ->
-  KamiGraph                      {- ^ initial graph         -} ->
-  Progress (Maybe [LNode Color]) {- ^ solution              -}
+  Int                                {- ^ solution length limit -} ->
+  KamiGraph                          {- ^ initial graph         -} ->
+  Progress (Maybe [LNode TileColor]) {- ^ solution              -}
 solve limit g = (fmap . fmap) (reverse . searchPath) (astar limit g)
 
 -- | Characterization of a particular search state used to eliminate unneeded
 -- duplicate states.
 summary :: KamiGraph -> V.Vector Int
-summary g = V.fromList (concat [ [x,y] | (x,y) <- labNodes g ])
+summary g = V.fromList (concat [ [x,y] | (x, TileColor y) <- labNodes g ])
 
 -- | Compute the number of unique colors remaining in the graph.
 colorsRemaining :: KamiGraph -> Int
-colorsRemaining = IntSet.size . IntSet.fromList . map snd . labNodes
+colorsRemaining = IntSet.size . IntSet.fromList . map (tileColorId . snd) . labNodes
 
 
 -- | Compute the unique list of the colors of nodes that are neighbors
 -- to the given node.
-adjacentColors :: KamiGraph -> Node -> [Color]
+adjacentColors :: KamiGraph -> Node -> [TileColor]
 adjacentColors g m = nub [ c | Just c <- lab g <$> neighbors g m ]
 
 
@@ -120,8 +124,6 @@ heuristic g = max ((diameter g + 1) `div` 2)
 astar :: Int -> KamiGraph -> Progress (Maybe SearchEntry)
 astar !limit start = go HashSet.empty (P.singleton minBound initialEntry)
   where
-    initialEntry = SearchEntry [] 0
-
     go seen work =
       case P.minView work of
         Nothing                   -> Done Nothing

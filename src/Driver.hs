@@ -22,7 +22,7 @@ import           System.Console.Terminfo
                     (Terminal, Color(..), setupTermFromEnv,
                      getCapability, withForegroundColor, carriageReturn)
 
-import           Kami (KamiGraph, solve, Progress(..))
+import           Kami
 import           Parser
 
 main :: IO ()
@@ -74,10 +74,10 @@ failure err = hPutStrLn stderr err >> exitFailure
 -- | Render a solution using the coordinates colored appropriately for
 -- the move. Split up the moves 10 per line.
 renderSolution ::
-  Terminal     {- ^ configured terminal       -} ->
-  String       {- ^ palette name              -} ->
-  IntMap Coord {- ^ map nodes to coordinates  -} ->
-  [LNode Int]  {- ^ nodes labeled with colors -} ->
+  Terminal          {- ^ configured terminal       -} ->
+  String            {- ^ palette name              -} ->
+  IntMap Coord      {- ^ map nodes to coordinates  -} ->
+  [LNode TileColor] {- ^ nodes labeled with colors -} ->
   String
 renderSolution term pal locs sol = unlines (intercalate ", " <$> chunksOf 10 steps)
   where
@@ -87,12 +87,12 @@ renderSolution term pal locs sol = unlines (intercalate ", " <$> chunksOf 10 ste
 -- | Wrap a content string with the control codes to give it
 -- the requested color.
 withColor ::
-  Terminal {- ^ configured terminal -} ->
-  String   {- ^ palette name        -} ->
-  Int      {- ^ color id            -} ->
-  String   {- ^ content             -} ->
-  String   {- ^ colored content     -}
-withColor term pal c str =
+  Terminal  {- ^ configured terminal -} ->
+  String    {- ^ palette name        -} ->
+  TileColor {- ^ tile color          -} ->
+  String    {- ^ content             -} ->
+  String    {- ^ colored content     -}
+withColor term pal (TileColor c) str =
   case getCapability term withForegroundColor of
     Just f  -> f (palette pal c) str
     Nothing -> str
@@ -119,7 +119,7 @@ buildGraph xs = (locs, g2)
 
    -- graph with one node per triangle
    g1 :: KamiGraph
-   g1 = mkGraph (zip [1..] (map snd xs))
+   g1 = mkGraph (zip [1..] (map (TileColor . snd) xs))
           [ (m Map.! coord, m Map.! coord', ())
                  | (coord, _) <- xs
                  , coord' <- Parser.neighbors1 coord
@@ -161,7 +161,7 @@ prettyKami term pal puz =
 
     drawRow i row =
       replicate i ' ' ++ intToDigit i : ' ' :
-      concat (zipWith (\s c -> withColor term pal c [s])
+      concat (zipWith (\s c -> withColor term pal (TileColor c) [s])
                       (cycle glyphs)
                       row) ++ [' ', intToDigit i]
 
