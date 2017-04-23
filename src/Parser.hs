@@ -1,4 +1,4 @@
-{-# Language BangPatterns, OverloadedStrings #-}
+{-# Language OverloadedStrings #-}
 
 module Parser
   ( -- * Coordinates
@@ -135,7 +135,7 @@ decodeSolution = go . groupBy ((==)`on`isDigit)
     go [] = Just []
     go (nstr:[cchr]:strs) =
        do n <- readMaybe nstr
-          let !c = ord cchr - ord 'A'
+          let c = ord cchr - ord 'A'
           xs <- go strs
-          Just ((n,c):xs)
+          c `seq` Just ((n,c):xs)
     go _ = Nothing

@@ -1,4 +1,4 @@
-{-# Language ForeignFunctionInterface, DeriveFunctor, BangPatterns #-}
+{-# Language ForeignFunctionInterface, DeriveFunctor #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Kami (KamiGraph, TileColor(..), Progress(..), solve) where
