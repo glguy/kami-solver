@@ -57,7 +57,7 @@ processPuzzle term fn =
 
      mb <- printProgress term
          $ scaleProgress 100
-         $ solve (puzMoves puz) g
+         $ solve g
 
      case mb of
        Nothing  -> failure "No solution"

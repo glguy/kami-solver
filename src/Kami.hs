@@ -13,6 +13,7 @@ import           Data.Maybe
 import qualified Data.Vector.Unboxed as V
 import qualified Data.PQueue.Prio.Min as P
 
+-- FFI related imports
 import           Foreign (Ptr, withArrayLen)
 import           System.IO.Unsafe (unsafePerformIO)
 
@@ -56,15 +57,14 @@ rebuildGraph g e = foldr (uncurry changeColor) g (searchPath e)
 
 
 solve ::
-  Int                                {- ^ solution length limit -} ->
   KamiGraph                          {- ^ initial graph         -} ->
   Progress (Maybe [LNode TileColor]) {- ^ solution              -}
-solve limit g = (fmap . fmap) (reverse . searchPath) (astar limit g)
+solve = fmap (fmap (reverse . searchPath)) . astar
 
 -- | Characterization of a particular search state used to eliminate unneeded
 -- duplicate states.
 summary :: KamiGraph -> V.Vector Int
-summary g = V.fromList (concat [ [x,y] | (x, TileColor y) <- labNodes g ])
+summary g = V.fromList [ z | (x, TileColor y) <- labNodes g, z <- [x,y] ]
 
 -- | Compute the number of unique colors remaining in the graph.
 colorsRemaining :: KamiGraph -> Int
@@ -82,12 +82,9 @@ adjacentColors g m = nub [ c | Just c <- lab g <$> neighbors g m ]
 -- moves remaining until a solution.
 step ::
   KamiGraph ->
-  Int                 {- ^ solution length                       -} ->
   SearchEntry         {- ^ current search state                  -} ->
   [(SearchEntry,Int)] {- ^ next search state and heuristic value -}
-step g limit (SearchEntry path cost)
-  | cost >= limit = []
-  | otherwise     =
+step g (SearchEntry path cost) =
 
   withStrategy (parList (evalTuple2 r0 rseq)) $
   applyMove <$> case path of
@@ -121,8 +118,8 @@ heuristic g = max ((diameter g + 1) `div` 2)
 -- A* prioritizes path possibilities by choosing those that have the
 -- minimum estimate of the lower-bound on the solution length starting
 -- from a particular search state.
-astar :: Int -> KamiGraph -> Progress (Maybe SearchEntry)
-astar !limit start = go HashSet.empty (P.singleton minBound initialEntry)
+astar :: KamiGraph -> Progress (Maybe SearchEntry)
+astar start = go HashSet.empty (P.singleton minBound initialEntry)
   where
     go seen work =
       case P.minView work of
@@ -135,17 +132,15 @@ astar !limit start = go HashSet.empty (P.singleton minBound initialEntry)
             r     = summary g
             g     = rebuildGraph start x
             seen' = HashSet.insert r seen
-            work2 = foldl' addWork work1 (step g limit x)
+            work2 = foldl' addWork work1 (step g x)
 
-            addWork w (x',h)
-              | prio > limit = w
-              | otherwise    = P.insert (Priority prio c) x' w
+            addWork w (x',h) = P.insert (Priority prio c) x' w
               where prio = c + h
                     c    = searchCost x'
 
 ------------------------------------------------------------------------
 
--- | This priority type considers elements small if their first component
+-- | This 'Priority' type considers elements small if their first component
 -- is small, and in the case of a tie prefers the element with the larger
 -- second component. This type will be used to prioritize the search queue
 -- for minimizing the lower-bound on the solution length but maximizing
