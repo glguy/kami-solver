@@ -1,7 +1,9 @@
-{-# Language ForeignFunctionInterface, DeriveFunctor #-}
+{-# Language ForeignFunctionInterface #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Kami (KamiGraph, TileColor(..), Progress(..), solve) where
+module Kami
+  (KamiGraph, TileColor(..), Progress(..),
+   solve, filterProgress, colorsRemaining) where
 
 import           Control.Parallel.Strategies
 import           Data.Graph.Inductive
@@ -13,15 +15,14 @@ import           Data.Maybe
 import qualified Data.Vector.Unboxed as V
 import qualified Data.PQueue.Prio.Min as P
 
+import           Progress
+
 -- FFI related imports
 import           Foreign (Ptr, withArrayLen)
 import           System.IO.Unsafe (unsafePerformIO)
 
 newtype TileColor = TileColor { tileColorId :: Int } deriving (Read, Show, Eq, Ord)
 type KamiGraph = Gr TileColor ()
-
-data Progress a = Step (Progress a) | Done a
-  deriving (Read, Show, Functor)
 
 ------------------------------------------------------------------------
 
@@ -57,9 +58,9 @@ rebuildGraph g e = foldr (uncurry changeColor) g (searchPath e)
 
 
 solve ::
-  KamiGraph                          {- ^ initial graph         -} ->
-  Progress (Maybe [LNode TileColor]) {- ^ solution              -}
-solve = fmap (fmap (reverse . searchPath)) . astar
+  KamiGraph                  {- ^ initial graph -} ->
+  Progress [LNode TileColor] {- ^ solution      -}
+solve = fmap (reverse . searchPath) . astar
 
 -- | Characterization of a particular search state used to eliminate unneeded
 -- duplicate states.
@@ -118,14 +119,14 @@ heuristic g = max ((diameter g + 1) `div` 2)
 -- A* prioritizes path possibilities by choosing those that have the
 -- minimum estimate of the lower-bound on the solution length starting
 -- from a particular search state.
-astar :: KamiGraph -> Progress (Maybe SearchEntry)
+astar :: KamiGraph -> Progress SearchEntry
 astar start = go HashSet.empty (P.singleton minBound initialEntry)
   where
     go seen work =
       case P.minView work of
-        Nothing                   -> Done Nothing
+        Nothing                   -> Done
         Just (x,work1)
-          | isSolved g            -> Done (Just x)
+          | isSolved g            -> Success x (go seen' work1)
           | HashSet.member r seen -> go seen work1
           | otherwise             -> Step (go seen' work2)
           where

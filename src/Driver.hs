@@ -22,6 +22,7 @@ import           System.Console.Terminfo
 
 import           Kami
 import           Parser
+import           Progress
 
 main :: IO ()
 main =
@@ -30,6 +31,11 @@ main =
      term <- setupTermFromEnv
      mapM_ (processPuzzle term) fns
 
+openPuzzle :: PuzzleData -> (IntMap Coord, KamiGraph)
+openPuzzle = renumber . buildGraph . removeBlanks . addCoordinates . puzTiles
+
+getPaletteName :: FilePath -> String
+getPaletteName = takeWhile isAlpha . takeBaseName
 
 -- | Process a puzzle file by rendering it, computing a solution,
 -- and rendering the solution.
@@ -41,27 +47,28 @@ processPuzzle term fn =
      putStrLn ""
 
      puz <- load fn
-     let pal = takeWhile isAlpha (takeBaseName fn)
-     let (locations, g) = renumber
-                        $ buildGraph
-                        $ removeBlanks
-                        $ addCoordinates
-                        $ puzTiles puz
+     let pal = getPaletteName fn
+         (loc, g) = openPuzzle puz
 
      putStrLn (prettyKami term pal puz)
      putStrLn ("Expected Moves: " ++ show (puzMoves puz))
      putStrLn ("Regions: " ++ show (noNodes g))
      putStrLn ("Connections: " ++ show (length (edges g)))
 
-     mb <- printProgress term
+     (if noComponents g == 1 then normalMode else islandMode) term pal loc g
+
+
+normalMode :: Terminal -> String -> IntMap Coord -> KamiGraph -> IO ()
+normalMode term pal loc g =
+  do mb <- printProgress term
          $ scaleProgress 100
          $ solve g
 
      case mb of
-       Nothing  -> failure "No solution"
-       Just sol ->
+       Nothing -> failure "No solution"
+       Just (sol,_) ->
          do putStrLn ("Solution: " ++ show (length sol))
-            putStr (renderSolution term pal locations sol)
+            putStr (renderSolution term pal loc sol)
 
 
 -- | Print an error message and terminate the program.
@@ -197,22 +204,55 @@ palette name n = cycle p !! max 0 (n - 1)
       ,("Tritarg"     ,[72 ,209,221,83 ,47 ,60 ])
       ,("Wall"        ,[47 ,59 ,168,83 ,79 ,215])]
 
-scaleProgress :: Int -> Progress a -> Progress a
-scaleProgress n = go 1
-  where
-    go _ (Done x)             = Done x
-    go i (Step x) | i >= n    = Step (go 1 x)
-                  | otherwise = go (i+1) x
 
 -- | Print a period every 50 steps before returning the final value.
-printProgress :: Terminal -> Progress a -> IO a
-printProgress term = go 1
+printProgress :: Terminal -> Progress a -> IO (Maybe (a, Progress a))
+printProgress term start = putStr "░░░░░░░░░ 0" >> go 1 start
   where
     cr = fromMaybe "\n" (getCapability term carriageReturn)
 
-    go _ (Done x) = x <$ putStrLn ""
+    go _ Done           = Nothing <$ putStrLn ""
+    go _ (Success x xs) = Just (x,xs) <$ putStrLn ""
     go i (Step x) =
       do let n = i `rem` 10
          putStr (cr ++ replicate n '▓' ++ replicate (9-n) '░' ++ ' ' : show i)
          hFlush stdout
          go (i+1) x
+
+------------------------------------------------------------------------
+
+islandMode ::
+  Terminal     {- ^ terminal   -} ->
+  String       {- ^ palette    -} ->
+  IntMap Coord {- ^ locations  -} ->
+  KamiGraph    {- ^ game graph -} ->
+  IO ()
+islandMode term pal loc g =
+  let gs = [ nfilter (`elem` ns) g | ns <- components g, not (null (tail ns)) ]
+  in for_ gs $ \g1 ->
+       do putStrLn "*** Island ***"
+          sols <- solveIsland term g1
+          for_ sols $ \sol ->
+            putStr ("* " ++ renderSolution term pal loc sol)
+
+-- | Print out all of the solutions of the minimum length for this island
+-- with up to one solution per color in the island.
+solveIsland :: Terminal -> KamiGraph -> IO [[LNode TileColor]]
+solveIsland term g =
+  do mb <- printProgress term (solve g)
+     case mb of
+       Nothing          -> return []
+       Just (sol, rest) ->
+         next sol (colorsRemaining g)
+                  (takeWhileProgress (\x -> length x == length sol) rest)
+
+  where
+    lastColor = snd . last
+
+    next sol 1 _ = return [sol]
+    next sol n prog =
+      do mb <- printProgress term
+             $ filterProgress (\x -> lastColor sol /= lastColor x) prog
+         case mb of
+           Nothing           -> return [sol]
+           Just (sol1,prog') -> (sol:) <$> next sol1 (n-1) prog'
